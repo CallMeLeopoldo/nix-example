@@ -1,54 +1,44 @@
 {
   description = "A Pet Project for Nix";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.flake-utils.url = "github:numtide/flake-utils";
-  inputs.gomod2nix.url = "github:nix-community/gomod2nix";
-  inputs.gomod2nix.inputs.nixpkgs.follows = "nixpkgs";
-  inputs.gomod2nix.inputs.flake-utils.follows = "flake-utils";
 
-  outputs = { self, nixpkgs, flake-utils, gomod2nix }:
-    (flake-utils.lib.eachDefaultSystem
-      (system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-          # The current default sdk for macOS fails to compile go projects, so we use a newer one for now.
-          # This has no effect on other platforms.
-          callPackage = pkgs.darwin.apple_sdk_11_0.callPackage or pkgs.callPackage;
-          serviceName = "echo";
-          pwd = builtins.getEnv "PWD";
-          version = builtins.hashString "sha256" pwd;
-          path = "";
-        in
-        rec {
-          environment.sessionVariables = rec {
-            XDG_CACHE_HOME  = "$HOME/.cache";
-            XDG_CONFIG_HOME = "$HOME/.config";
-            XDG_DATA_HOME   = "$HOME/.local/share";
-            XDG_STATE_HOME  = "$HOME/.local/state";
+  inputs = {
+    utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    gomod2nix.url = "github:nix-community/gomod2nix";
+    gomod2nix.inputs.nixpkgs.follows = "nixpkgs";
+    gomod2nix.inputs.flake-utils.follows = "flake-utils";
+    flake-utils.url = "github:numtide/flake-utils";
+  };
 
-            # Not officially in the specification
-            XDG_BIN_HOME    = "$HOME/.local/bin";
-            PATH = [
-              "${XDG_BIN_HOME}"
-            ];
-          };
+  outputs = { self, nixpkgs, flake-utils, gomod2nix, utils }:
+    let
+      pkgs = import <nixpkgs> {};
+      localOverlay =  import ./nix/default.nix;
+      # The current default sdk for macOS fails to compile go projects, so we use a newer one for now.
+      # This has no effect on other platforms.
 
-          packages.build = callPackage ./services/echo {
-            inherit (gomod2nix.legacyPackages.${system}) buildGoApplication;
-            version = version;
-            serviceName = serviceName;
-          };
-          packages.contain = pkgs.dockerTools.buildImage {
-            name = "echo";
-            tag = packages.build.version;
-            created = "now";
-            copyToRoot = packages.build;
-            config.Cmd = [ "${packages.build}/bin/main" ];
-          };
-          devShells.default = callPackage ./shell.nix {
-            inherit (gomod2nix.legacyPackages.${system}) mkGoEnv gomod2nix;
-          };
-        })
-    );
+      pkgsForSystem = system: import nixpkgs {
+        # if you have additional overlays, you may add them here
+        overlays = [
+            localOverlay # this should expose devShell
+        ];
+        inherit system;
+      };
+    in utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ] (system: rec {
+        legacyPackages = pkgsForSystem system;
+        packages = {
+            inherit (legacyPackages) devShell template;
+            default = pkgs.callPackage ./. {
+                inherit (gomod2nix.legacyPackages.${system}) buildGoApplication;
+            };
+        };
+        checks = { inherit (legacyPackages) template; };
+        devShells.default = {
+            inherit legacyPackages;
+            default = pkgs.callPackage ./. {
+                inherit (gomod2nix.legacyPackages.${system}) mkGoEnv gomod2nix;
+            };
+        };
+    });
 }
